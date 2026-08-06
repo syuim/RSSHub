@@ -8,6 +8,7 @@ import { parseDate } from '@/utils/parse-date';
 import timezone from '@/utils/timezone';
 
 const host = 'https://www.sehuatang.net/';
+const browserUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 const forumIdMaps = {
     // 原创 BT 电影
@@ -70,7 +71,7 @@ const getSafeId = () =>
     cache.tryGet(
         'sehuatang:safeid',
         async () => {
-            const response = await ofetch(host);
+            const response = await ofetch(host, { headers: { "User-Agent": browserUA } });
             const $ = load(response);
             const safeId = $('script:contains("safeid")')
                 .text()
@@ -88,6 +89,7 @@ async function handler(ctx) {
     const typefilter = type ? `&filter=typeid&typeid=${type}` : '';
     const link = `${host}forum.php?mod=forumdisplay&orderby=dateline&fid=${subformId}${typefilter}`;
     const headers = {
+        "User-Agent": browserUA,
         Cookie: `_safe=${await getSafeId()};`,
     };
 
