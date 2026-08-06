@@ -1,9 +1,9 @@
 import { load } from 'cheerio';
+import { execSync } from 'child_process';
 
 import { config } from '@/config';
 import type { DataItem, Route } from '@/types';
 import cache from '@/utils/cache';
-import ofetch from '@/utils/ofetch';
 import { parseDate } from '@/utils/parse-date';
 import timezone from '@/utils/timezone';
 
@@ -67,11 +67,18 @@ export const route: Route = {
 | yczp     | ztzp     | hrjp     | yzxa     | omxa     | ktdm     | ttxz     |`,
 };
 
+// 使用 curl 子进程绕过 Cloudflare TLS 指纹检测
+const curlFetch = (url: string, cookie?: string): string => {
+    const cookieArg = cookie ? ` -b "${cookie}"` : '';
+    const cmd = `curl -sk -m 30 -A "${browserUA}"${cookieArg} "${url}"`;
+    return execSync(cmd).toString();
+};
+
 const getSafeId = () =>
     cache.tryGet(
         'sehuatang:safeid',
         async () => {
-            const response = await ofetch(host, { headers: { "User-Agent": browserUA } });
+            const response = curlFetch(host);
             const $ = load(response);
             const safeId = $('script:contains("safeid")')
                 .text()
@@ -88,14 +95,9 @@ async function handler(ctx) {
     const type = ctx.req.param('type');
     const typefilter = type ? `&filter=typeid&typeid=${type}` : '';
     const link = `${host}forum.php?mod=forumdisplay&orderby=dateline&fid=${subformId}${typefilter}`;
-    const headers = {
-        "User-Agent": browserUA,
-        Cookie: `_safe=${await getSafeId()};`,
-    };
+    const cookie = `_safe=${await getSafeId()};`;
 
-    const response = await ofetch(link, {
-        headers,
-    });
+    const response = curlFetch(link, cookie);
     const $ = load(response);
 
     const list = $('#threadlisttableid tbody[id^=normalthread]')
@@ -115,9 +117,7 @@ async function handler(ctx) {
     const out = await Promise.all(
         list.map((info) =>
             cache.tryGet(info.link!, async () => {
-                const response = await ofetch(info.link!, {
-                    headers,
-                });
+                const response = curlFetch(info.link!, cookie);
 
                 const $ = load(response);
                 const postMessage = $('div[id^="postmessage"], td[id^="postmessage"]').slice(0, 1);
