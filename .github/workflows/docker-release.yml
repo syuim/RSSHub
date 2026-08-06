@@ -142,5 +142,6 @@ jobs:
             - name: Create manifest list and push
               working-directory: ${{ runner.temp }}/digests
               run: |
+                  repo_lower="${GITHUB_REPOSITORY,,}" # docker references must be lowercase
                   docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-                      $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
+                      $(printf "ghcr.io/${repo_lower}@sha256:%s " *)
