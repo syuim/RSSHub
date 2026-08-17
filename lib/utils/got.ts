@@ -1,6 +1,7 @@
 import { destr } from 'destr';
 
 import ofetch from '@/utils/ofetch';
+import { buildProxyUrl } from '@/utils/url-proxy';
 
 import { getSearchParamsString } from './helpers';
 
@@ -64,16 +65,32 @@ const getFakeGot = (defaultOptions?: any) => {
             delete options.cookieJar;
         }
 
-        const response = ofetch(request, options);
+        const originalUrl = request;
+        try {
+            request = buildProxyUrl(request);
+        } catch {
+            // 构建代理 URL 失败，保持原 URL
+        }
+
+        let res;
+        try {
+            res = await ofetch(request, options);
+        } catch (error) {
+            if (request === originalUrl) {
+                throw error;
+            }
+            // 代理失败，回退直连
+            request = originalUrl;
+            res = await ofetch(request, options);
+        }
 
         if (options?.responseType === 'arrayBuffer') {
-            const responseData = await response;
             return {
-                data: Buffer.from(responseData),
-                body: Buffer.from(responseData),
+                data: Buffer.from(res),
+                body: Buffer.from(res),
             };
         }
-        return response;
+        return res;
     };
 
     fakeGot.get = (request, options?) => fakeGot(request, { ...options, method: 'GET' });
