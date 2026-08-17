@@ -56,15 +56,12 @@ const getFakeGot = (defaultOptions?: any) => {
             delete options.searchParams;
         }
 
-        // Add support for buffer responseType, to be compatible with got
-        options.parseResponse = (responseText) => ({
-            data: destr(responseText),
-            body: responseText,
-        });
+        // 保存 parseResponse 后移除，由 ofetch.raw 返回原始 body 后手动处理
+        const parseResponse = options.parseResponse;
+        delete options.parseResponse;
 
         if (options?.responseType === 'buffer' || options?.responseType === 'arrayBuffer') {
             options.responseType = 'arrayBuffer';
-            delete options.parseResponse;
         }
 
         if (options.cookieJar) {
@@ -79,31 +76,40 @@ const getFakeGot = (defaultOptions?: any) => {
         }
 
         const originalUrl = request;
+        let useProxy = false;
         try {
             request = buildProxyUrl(request);
+            useProxy = true;
         } catch {
             // 构建代理 URL 失败，保持原 URL
         }
 
-        let res;
+        let raw;
         try {
-            res = await ofetch(request, options);
+            raw = await ofetch.raw(request, options);
+            if (useProxy && raw.status >= 400) {
+                throw new Error(`proxy ${raw.status}`);
+            }
         } catch (error) {
-            if (request === originalUrl) {
+            if (!useProxy) {
                 throw error;
             }
             // 代理失败，回退直连
             request = originalUrl;
-            res = await ofetch(request, options);
+            raw = await ofetch.raw(request, options);
         }
 
         if (options?.responseType === 'arrayBuffer') {
             return {
-                data: Buffer.from(res),
-                body: Buffer.from(res),
+                data: Buffer.from(raw._data),
+                body: Buffer.from(raw._data),
             };
         }
-        return res;
+
+        if (parseResponse) {
+            return parseResponse(raw._data);
+        }
+        return { data: destr(raw._data), body: raw._data };
     };
 
     fakeGot.get = (request, options?) => fakeGot(request, { ...options, method: 'GET' });
