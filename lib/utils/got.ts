@@ -1,9 +1,22 @@
 import { destr } from 'destr';
 
 import ofetch from '@/utils/ofetch';
-import { buildProxyUrl } from '@/utils/url-proxy';
 
 import { getSearchParamsString } from './helpers';
+
+const DEFAULT_PROXY = 'https://proxy.laoz.org/url?url=';
+
+const buildProxyUrl = (targetUrl: string | URL, proxyBase = DEFAULT_PROXY): string => {
+    const target = typeof targetUrl === 'string' ? targetUrl : targetUrl.href;
+    const encoded = encodeURIComponent(target);
+
+    if (proxyBase.endsWith('=') || proxyBase.endsWith('&') || proxyBase.endsWith('?')) {
+        return `${proxyBase}${encoded}`;
+    }
+
+    const separator = proxyBase.includes('?') ? '&' : '?';
+    return `${proxyBase}${separator}url=${encoded}`;
+};
 
 const getFakeGot = (defaultOptions?: any) => {
     const fakeGot = async (request, options?: any) => {
