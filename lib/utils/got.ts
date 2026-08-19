@@ -4,19 +4,20 @@ import ofetch from '@/utils/ofetch';
 
 import { getSearchParamsString } from './helpers';
 
-const DEFAULT_PROXY = 'https://proxy.laoz.org/url?url=';
+// 全局 CF 代理已暂停（节点直连源站）：恢复时取消下方注释
+// const DEFAULT_PROXY = 'https://proxy.laoz.org/url?url=';
 
-const buildProxyUrl = (targetUrl: string | URL, proxyBase = DEFAULT_PROXY): string => {
-    const target = typeof targetUrl === 'string' ? targetUrl : targetUrl.href;
-    const encoded = encodeURIComponent(target);
+// const buildProxyUrl = (targetUrl: string | URL, proxyBase = DEFAULT_PROXY): string => {
+//     const target = typeof targetUrl === 'string' ? targetUrl : targetUrl.href;
+//     const encoded = encodeURIComponent(target);
 
-    if (proxyBase.endsWith('=') || proxyBase.endsWith('&') || proxyBase.endsWith('?')) {
-        return `${proxyBase}${encoded}`;
-    }
+//     if (proxyBase.endsWith('=') || proxyBase.endsWith('&') || proxyBase.endsWith('?')) {
+//         return `${proxyBase}${encoded}`;
+//     }
 
-    const separator = proxyBase.includes('?') ? '&' : '?';
-    return `${proxyBase}${separator}url=${encoded}`;
-};
+//     const separator = proxyBase.includes('?') ? '&' : '?';
+//     return `${proxyBase}${separator}url=${encoded}`;
+// };
 
 const getFakeGot = (defaultOptions?: any) => {
     const fakeGot = async (request, options?: any) => {
@@ -75,29 +76,32 @@ const getFakeGot = (defaultOptions?: any) => {
             delete options.cookieJar;
         }
 
-        const originalUrl = request;
-        let useProxy = false;
-        try {
-            request = buildProxyUrl(request);
-            useProxy = true;
-        } catch {
-            // 构建代理 URL 失败，保持原 URL
-        }
+        // 全局 CF 代理已暂停：直连源站（恢复时取消下方注释，并将 raw 改为直连 fetch）
+        // const originalUrl = request;
+        // let useProxy = false;
+        // try {
+        //     request = buildProxyUrl(request);
+        //     useProxy = true;
+        // } catch {
+        //     // 构建代理 URL 失败，保持原 URL
+        // }
 
-        let raw;
-        try {
-            raw = await ofetch.raw(request, options);
-            if (useProxy && raw.status >= 400) {
-                throw new Error(`proxy ${raw.status}`);
-            }
-        } catch (error) {
-            if (!useProxy) {
-                throw error;
-            }
-            // 代理失败，回退直连
-            request = originalUrl;
-            raw = await ofetch.raw(request, options);
-        }
+        const raw = await ofetch.raw(request, options);
+        // 代理失败回退直连（随代理暂停一并注释）
+        // let raw;
+        // try {
+        //     raw = await ofetch.raw(request, options);
+        //     if (useProxy && raw.status >= 400) {
+        //         throw new Error(`proxy ${raw.status}`);
+        //     }
+        // } catch (error) {
+        //     if (!useProxy) {
+        //         throw error;
+        //     }
+        //     // 代理失败，回退直连
+        //     request = originalUrl;
+        //     raw = await ofetch.raw(request, options);
+        // }
 
         if (options?.responseType === 'arrayBuffer') {
             return {
