@@ -209,7 +209,7 @@ async function handler(ctx) {
 
                 return item;
             }),
-        { concurrency: 5 }
+        { concurrency: 15 }
     );
 
     const title = $('head title').text();
