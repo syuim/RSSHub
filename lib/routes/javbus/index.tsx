@@ -115,95 +115,100 @@ async function handler(ctx) {
         });
 
     items = await fetchInBatches(items, async (item) => {
-        const detailResponse = await got({
-            method: 'get',
-            url: item.link,
-            headers,
-        });
-
-        const content = load(detailResponse.data);
-
-        content('.genre').last().parent().remove();
-        content('input[type="checkbox"], button').remove();
-
-        const stars = content('.avatar-box span')
-            .toArray()
-            .map((s) => content(s).text());
-
-        const cacheIn = {
-            author: stars.join(', '),
-            title: content('h3').text(),
-            category: [
-                ...content('.genre label')
-                    .toArray()
-                    .map((c) => content(c).text()),
-                ...stars,
-            ],
-            info: content('.row.movie').html(),
-            thumbs: content('.sample-box')
-                .toArray()
-                .map((i) => {
-                    const thumbSrc = content(i).attr('href');
-                    return thumbSrc!.startsWith('http') ? thumbSrc : `${rootUrl}${thumbSrc}`;
-                }),
-        };
-
-        let magnets;
-
-        // To fetch magnets.
-
         try {
-            const matches = detailResponse.data.match(/var gid = (\d+);[\s\S]*var uc = (\d+);[\s\S]*var img = '(.*)';/);
-
-            const magnetResponse = await got({
+            const detailResponse = await got({
                 method: 'get',
-                url: `${rootUrl}/ajax/uncledatoolsbyajax.php`,
-                searchParams: {
-                    gid: matches[1],
-                    lang: 'zh',
-                    img: matches[3],
-                    uc: matches[2],
-                    floor: 800,
-                },
-                headers: {
-                    Referer: item.link,
-                },
+                url: item.link,
+                headers,
             });
 
-            const content = load(`<table>${magnetResponse.data}</table>`);
+            const content = load(detailResponse.data);
 
-            magnets = content('tr')
+            content('.genre').last().parent().remove();
+            content('input[type="checkbox"], button').remove();
+
+            const stars = content('.avatar-box span')
                 .toArray()
-                .map((tr) => {
-                    const td = content(tr).find('a[href]');
+                .map((s) => content(s).text());
 
-                    return {
-                        title: td.first().text().trim(),
-                        link: td.first().attr('href'),
-                        size: td.eq(1).text().trim(),
-                        date: td.last().text().trim(),
-                        score: content(tr).find('a').length ** 8 * toSize(td.eq(1).text().trim()),
-                    };
+            const cacheIn = {
+                author: stars.join(', '),
+                title: content('h3').text(),
+                category: [
+                    ...content('.genre label')
+                        .toArray()
+                        .map((c) => content(c).text()),
+                    ...stars,
+                ],
+                info: content('.row.movie').html(),
+                thumbs: content('.sample-box')
+                    .toArray()
+                    .map((i) => {
+                        const thumbSrc = content(i).attr('href');
+                        return thumbSrc!.startsWith('http') ? thumbSrc : `${rootUrl}${thumbSrc}`;
+                    }),
+            };
+
+            let magnets;
+
+            // To fetch magnets.
+
+            try {
+                const matches = detailResponse.data.match(/var gid = (\d+);[\s\S]*var uc = (\d+);[\s\S]*var img = '(.*)';/);
+
+                const magnetResponse = await got({
+                    method: 'get',
+                    url: `${rootUrl}/ajax/uncledatoolsbyajax.php`,
+                    searchParams: {
+                        gid: matches[1],
+                        lang: 'zh',
+                        img: matches[3],
+                        uc: matches[2],
+                        floor: 800,
+                    },
+                    headers: {
+                        Referer: item.link,
+                    },
                 });
 
-            if (magnets) {
-                item.enclosure_url = magnets.toSorted((a, b) => b.score - a.score)[0].link;
-                item.enclosure_type = 'application/x-bittorrent';
+                const content = load(`<table>${magnetResponse.data}</table>`);
+
+                magnets = content('tr')
+                    .toArray()
+                    .map((tr) => {
+                        const td = content(tr).find('a[href]');
+
+                        return {
+                            title: td.first().text().trim(),
+                            link: td.first().attr('href'),
+                            size: td.eq(1).text().trim(),
+                            date: td.last().text().trim(),
+                            score: content(tr).find('a').length ** 8 * toSize(td.eq(1).text().trim()),
+                        };
+                    });
+
+                if (magnets) {
+                    item.enclosure_url = magnets.toSorted((a, b) => b.score - a.score)[0].link;
+                    item.enclosure_type = 'application/x-bittorrent';
+                }
+            } catch {
+                // no-empty
             }
+
+            item.author = cacheIn.author;
+            item.title = cacheIn.title;
+            item.category = cacheIn.category;
+            item.description = renderDescription({
+                info: cacheIn.info,
+                thumbs: cacheIn.thumbs,
+                magnets,
+            });
+
+            return item;
         } catch {
-            // no-empty
+            // detail page rate-limited (429) or unavailable: keep the bare item instead of failing the whole route
+            return item;
         }
-
-        item.author = cacheIn.author;
-        item.title = cacheIn.title;
-        item.category = cacheIn.category;
-        item.description = renderDescription({
-            info: cacheIn.info,
-            thumbs: cacheIn.thumbs,
-            magnets,
-        });
-
-        return item;
     });
 
     const title = $('head title').text();
