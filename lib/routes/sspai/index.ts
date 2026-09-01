@@ -1,4 +1,4 @@
-import type { Route } from '@/types';
+import type { DataItem, Route } from '@/types';
 import { ViewType } from '@/types';
 import cache from '@/utils/cache';
 import got from '@/utils/got';
@@ -35,34 +35,35 @@ async function handler() {
         method: 'get',
         url: api_url,
     });
-    const items = await Promise.all(
-        resp.data.data.map((item) => {
-            const link = `https://sspai.com/api/v1/${item.slug ? `member/article/single/info/get?slug=${item.slug}` : `article/info/get?id=${item.id}`}&view=second&support_webp=true`;
-            let description = '';
+    const items: DataItem[] = [];
+    for (const item of resp.data.data) {
+        const link = `https://sspai.com/api/v1/${item.slug ? `member/article/single/info/get?slug=${item.slug}` : `article/info/get?id=${item.id}`}&view=second&support_webp=true`;
+        let description = '';
 
-            const key = `sspai: ${item.id}`;
-            return cache.tryGet(key, async () => {
-                const response = await got({ method: 'get', url: link });
-                const articleData = response.data.data;
-                const banner = articleData.promote_image;
-                if (banner) {
-                    description = `<img src="${banner}" alt="Article Cover Image" style="display: block; margin: 0 auto;"><br>`;
-                }
-                if (articleData.body_extends) {
-                    description += articleData.body_extends.map((bodyExtendsItem) => `<h2>${bodyExtendsItem.title}</h2>${bodyExtendsItem.body}`).join('');
-                }
-                description += articleData.body;
+        const key = `sspai: ${item.id}`;
+        // eslint-disable-next-line no-await-in-loop
+        const processed = await cache.tryGet(key, async () => {
+            const response = await got({ method: 'get', url: link });
+            const articleData = response.data.data;
+            const banner = articleData.promote_image;
+            if (banner) {
+                description = `<img src="${banner}" alt="Article Cover Image" style="display: block; margin: 0 auto;"><br>`;
+            }
+            if (articleData.body_extends) {
+                description += articleData.body_extends.map((bodyExtendsItem) => `<h2>${bodyExtendsItem.title}</h2>${bodyExtendsItem.body}`).join('');
+            }
+            description += articleData.body;
 
-                return {
-                    title: item.title.trim(),
-                    description,
-                    link: `https://sspai.com/post/${item.id}`,
-                    pubDate: parseDate(item.released_time * 1000),
-                    author: item.author.nickname,
-                };
-            });
-        })
-    );
+            return {
+                title: item.title.trim(),
+                description,
+                link: `https://sspai.com/post/${item.id}`,
+                pubDate: parseDate(item.released_time * 1000),
+                author: item.author.nickname,
+            };
+        });
+        items.push(processed);
+    }
 
     return {
         title: '少数派',

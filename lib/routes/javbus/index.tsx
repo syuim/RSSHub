@@ -7,7 +7,6 @@ import ConfigNotFoundError from '@/errors/types/config-not-found';
 import type { DataItem, Route } from '@/types';
 import { ViewType } from '@/types';
 import { getSubPath } from '@/utils/common-utils';
-import fetchInBatches from '@/utils/fetch-in-batches';
 import got from '@/utils/got';
 import { parseDate } from '@/utils/parse-date';
 
@@ -114,8 +113,10 @@ async function handler(ctx) {
             };
         });
 
-    items = await fetchInBatches(items, async (item) => {
+    const processedItems: DataItem[] = [];
+    for (const item of items) {
         try {
+            // eslint-disable-next-line no-await-in-loop
             const detailResponse = await got({
                 method: 'get',
                 url: item.link,
@@ -156,6 +157,7 @@ async function handler(ctx) {
             try {
                 const matches = detailResponse.data.match(/var gid = (\d+);[\s\S]*var uc = (\d+);[\s\S]*var img = '(.*)';/);
 
+                // eslint-disable-next-line no-await-in-loop
                 const magnetResponse = await got({
                     method: 'get',
                     url: `${rootUrl}/ajax/uncledatoolsbyajax.php`,
@@ -204,12 +206,13 @@ async function handler(ctx) {
                 magnets,
             });
 
-            return item;
+            processedItems.push(item);
         } catch {
             // detail page rate-limited (429) or unavailable: keep the bare item instead of failing the whole route
-            return item;
+            processedItems.push(item);
         }
-    });
+    }
+    items = processedItems;
 
     const title = $('head title').text();
 

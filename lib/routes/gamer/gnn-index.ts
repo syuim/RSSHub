@@ -1,5 +1,4 @@
 import { load } from 'cheerio';
-import pMap from 'p-map';
 
 import type { DataItem, Route } from '@/types';
 import { ViewType } from '@/types';
@@ -113,9 +112,11 @@ async function handler(ctx) {
             };
         });
 
-    const items = await pMap(
-        list,
-        async (item) => {
+    const items: DataItem[] = [];
+    for (const item of list) {
+        // eslint-disable-next-line no-await-in-loop
+        const processed = await (async (item) => {
+            // eslint-disable-next-line no-await-in-loop
             item.description = await cache.tryGet(item.link!, async () => {
                 const response = await got.get(item.link);
                 let component: string;
@@ -161,9 +162,9 @@ async function handler(ctx) {
                 return component;
             });
             return item;
-        },
-        { concurrency: 5 }
-    );
+        })(item);
+        items.push(processed);
+    }
 
     return {
         title: '巴哈姆特-GNN新聞' + categoryName,

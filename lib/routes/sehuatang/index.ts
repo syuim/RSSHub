@@ -1,5 +1,6 @@
+import { execSync } from 'node:child_process';
+
 import { load } from 'cheerio';
-import { execSync } from 'child_process';
 
 import { config } from '@/config';
 import type { DataItem, Route } from '@/types';
@@ -77,6 +78,7 @@ const curlFetch = (url: string, cookie?: string): string => {
 const getSafeId = () =>
     cache.tryGet(
         'sehuatang:safeid',
+        // eslint-disable-next-line require-await
         async () => {
             const response = curlFetch(host);
             const $ = load(response);
@@ -114,9 +116,12 @@ async function handler(ctx) {
             };
         });
 
-    const out = await Promise.all(
-        list.map((info) =>
-            cache.tryGet(info.link!, async () => {
+    const out: DataItem[] = [];
+    for (const info of list) {
+        // eslint-disable-next-line no-await-in-loop
+        const processed = await cache.tryGet(
+            info.link!, // eslint-disable-next-line require-await
+            async () => {
                 const response = curlFetch(info.link!, cookie);
 
                 const $ = load(response);
@@ -159,9 +164,12 @@ async function handler(ctx) {
                 }
 
                 return info;
-            })
-        )
-    );
+            }
+        );
+        if (processed) {
+            out.push(processed);
+        }
+    }
 
     return {
         title: `色花堂 - ${$('#pt > div:nth-child(1) > a:last-child').text()}`,

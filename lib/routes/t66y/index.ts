@@ -91,17 +91,20 @@ async function handler(ctx) {
             };
         });
 
-    const out = await Promise.all(
-        list.map((item) =>
-            cache.tryGet(item.link!, async () => {
-                const { data: response } = await got(item.link);
+    const out: DataItem[] = [];
+    for (const item of list) {
+        // eslint-disable-next-line no-await-in-loop
+        const processed = await cache.tryGet(item.link!, async () => {
+            const { data: response } = await got(item.link);
 
-                item.description = parseContent(response);
+            item.description = parseContent(response);
 
-                return item;
-            })
-        )
-    );
+            return item;
+        });
+        if (processed) {
+            out.push(processed);
+        }
+    }
 
     return {
         title: (isValidType ? `[${$('.t .fn b').text()}] ` : '') + (search ? `[${SEARCH_NAMES[search]}] ` : '') + $('head title').text(),

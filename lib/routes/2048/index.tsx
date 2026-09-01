@@ -120,70 +120,73 @@ async function handler(ctx) {
         })
         .filter((item) => !item.link.includes('undefined'));
 
-    const items = await Promise.all(
-        list.map((item) =>
-            cache.tryGet(item.guid, async () => {
-                const detailResponse = await ofetch(item.link, {
-                    headers: {
-                        cookie: `_safe=${redirected.safeid}`,
-                    },
-                });
+    const items: DataItem[] = [];
+    for (const item of list) {
+        // eslint-disable-next-line no-await-in-loop
+        const processed = await cache.tryGet(item.guid, async () => {
+            const detailResponse = await ofetch(item.link, {
+                headers: {
+                    cookie: `_safe=${redirected.safeid}`,
+                },
+            });
 
-                const content = load(detailResponse);
+            const content = load(detailResponse);
 
-                content('.ads, .tips').remove();
+            content('.ads, .tips').remove();
 
-                content('ignore_js_op').each((_, el) => {
-                    const img = content(el).find('img');
-                    const originalSrc = img.attr('data-original');
-                    const fallbackSrc = img.attr('src');
-                    // 判断是否有 data-original 属性，若有则使用其值，否则使用 src 属性值
-                    const imgSrc = originalSrc || fallbackSrc;
-                    content(el).replaceWith(`<img src="${imgSrc}">`);
-                });
+            content('ignore_js_op').each((_, el) => {
+                const img = content(el).find('img');
+                const originalSrc = img.attr('data-original');
+                const fallbackSrc = img.attr('src');
+                // 判断是否有 data-original 属性，若有则使用其值，否则使用 src 属性值
+                const imgSrc = originalSrc || fallbackSrc;
+                content(el).replaceWith(`<img src="${imgSrc}">`);
+            });
 
-                item.author = content('.fl.black').first().text();
-                item.pubDate = timezone(parseDate(content('span.fl.gray').first().attr('title')!), 8);
+            item.author = content('.fl.black').first().text();
+            item.pubDate = timezone(parseDate(content('span.fl.gray').first().attr('title')!), 8);
 
-                const readTpc = content('#read_tpc').first();
-                const copyLink = content('#copytext')?.first()?.text();
-                const readTpcHtml = readTpc.html() ?? '';
-                const magnetText = readTpc.find('.magnet-text').first().text().trim();
+            const readTpc = content('#read_tpc').first();
+            const copyLink = content('#copytext')?.first()?.text();
+            const readTpcHtml = readTpc.html() ?? '';
+            const magnetText = readTpc.find('.magnet-text').first().text().trim();
 
-                // Extract enclosure: rmdown.com (fetch page for magnet) | magnet from 哈希校验 | copyLink
-                const rmdownLink = readTpc.find('a[href*="rmdown.com/link.php"]').first().attr('href');
-                const enclosureHref = rmdownLink?.startsWith('http') ? rmdownLink : rmdownLink ? `https://www.rmdown.com/${rmdownLink}` : null;
+            // Extract enclosure: rmdown.com (fetch page for magnet) | magnet from 哈希校验 | copyLink
+            const rmdownLink = readTpc.find('a[href*="rmdown.com/link.php"]').first().attr('href');
+            const enclosureHref = rmdownLink?.startsWith('http') ? rmdownLink : rmdownLink ? `https://www.rmdown.com/${rmdownLink}` : null;
 
-                if (enclosureHref) {
-                    const rmdownPage = await cache.tryGet(`2048:rmdown:${enclosureHref}`, () => ofetch(enclosureHref));
-                    const btihMatch = rmdownPage.match(/Code:\s*([a-fA-F0-9]{40})/);
-                    const magnetUrl = btihMatch ? `magnet:?xt=urn:btih:${btihMatch[1]}` : null;
-                    if (magnetUrl) {
-                        item.enclosure_url = magnetUrl;
-                        item.enclosure_type = 'x-scheme-handler/magnet';
-                    }
+            if (enclosureHref) {
+                const rmdownPage = await cache.tryGet(`2048:rmdown:${enclosureHref}`, () => ofetch(enclosureHref));
+                const btihMatch = rmdownPage.match(/Code:\s*([a-fA-F0-9]{40})/);
+                const magnetUrl = btihMatch ? `magnet:?xt=urn:btih:${btihMatch[1]}` : null;
+                if (magnetUrl) {
+                    item.enclosure_url = magnetUrl;
+                    item.enclosure_type = 'x-scheme-handler/magnet';
                 }
-                if (!item.enclosure_url) {
-                    const hashMatch = readTpcHtml.match(/哈希校验[^;]*;\s*([a-f0-9]{40})\s*[;；]/i);
-                    const magnetFromHash = hashMatch ? `magnet:?xt=urn:btih:${hashMatch[1]}` : null;
-                    const magnetFromText = magnetText.match(/magnet:\?xt=urn:btih:[^\s"'<>]+/)?.[0];
-                    const magnetLink = magnetFromText ?? readTpcHtml.match(/magnet:\?xt=urn:btih:[^\s"'<>]+/)?.[0] ?? magnetFromHash ?? copyLink;
-                    if (magnetLink?.startsWith('magnet')) {
-                        item.enclosure_url = magnetLink;
-                        item.enclosure_type = 'x-scheme-handler/magnet';
-                    }
+            }
+            if (!item.enclosure_url) {
+                const hashMatch = readTpcHtml.match(/哈希校验[^;]*;\s*([a-f0-9]{40})\s*[;；]/i);
+                const magnetFromHash = hashMatch ? `magnet:?xt=urn:btih:${hashMatch[1]}` : null;
+                const magnetFromText = magnetText.match(/magnet:\?xt=urn:btih:[^\s"'<>]+/)?.[0];
+                const magnetLink = magnetFromText ?? readTpcHtml.match(/magnet:\?xt=urn:btih:[^\s"'<>]+/)?.[0] ?? magnetFromHash ?? copyLink;
+                if (magnetLink?.startsWith('magnet')) {
+                    item.enclosure_url = magnetLink;
+                    item.enclosure_type = 'x-scheme-handler/magnet';
                 }
+            }
 
-                content('.showhide img').each((_, el) => {
-                    readTpc.append(`<br><img style="max-width: 100%;" src="${content(el).attr('src')}">`);
-                });
+            content('.showhide img').each((_, el) => {
+                readTpc.append(`<br><img style="max-width: 100%;" src="${content(el).attr('src')}">`);
+            });
 
-                item.description = readTpc.html();
+            item.description = readTpc.html();
 
-                return item;
-            })
-        )
-    );
+            return item;
+        });
+        if (processed) {
+            items.push(processed);
+        }
+    }
 
     return {
         title: `${$('#main #breadCrumb a').last().text()} - 2048核基地`,
