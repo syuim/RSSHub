@@ -143,10 +143,14 @@ const middleware: MiddlewareHandler = async (ctx, next) => {
 
     const data: Data = ctx.get('data');
     if (ctx.res.headers.get('Cache-Control') !== 'no-cache' && data) {
-        data.lastBuildDate = new Date().toUTCString();
-        ctx.set('data', data);
-        const body = JSON.stringify(data);
-        await cacheModule.globalCache.set(key, body, PERMANENT_TTL);
+        if (isBypass && (!data.item || data.item.length === 0)) {
+            logger.warn(`Async refresh: skip caching empty result for ${requestPath}`);
+        } else {
+            data.lastBuildDate = new Date().toUTCString();
+            ctx.set('data', data);
+            const body = JSON.stringify(data);
+            await cacheModule.globalCache.set(key, body, PERMANENT_TTL);
+        }
     }
 
     await cacheModule.globalCache.set(controlKey, '0', config.cache.requestTimeout);
