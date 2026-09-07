@@ -20,6 +20,15 @@ const REFRESH_LOCK_TTL = 30; // 刷新锁 TTL（秒），防止并发刷新
 
 const REFRESH_LOCK_PREFIX = 'rsshub:refresh-lock:';
 
+// 异步刷新熔断器：持久失败的路由逐步退避，避免无效连接堆积
+const refreshCircuitBreaker = new Map<string, { failures: number; nextRetryAt: number }>();
+const CB_INITIAL_BACKOFF = 60000; // 首次熔断 1min
+const CB_MAX_BACKOFF = 3_600_000; // 最长熔断 1h
+
+function getCircuitBreakerBackoff(failures: number): number {
+    return Math.min(CB_INITIAL_BACKOFF * 2 ** (failures - 1), CB_MAX_BACKOFF);
+}
+
 const { h64ToString } = await xxhash();
 
 async function triggerAsyncRefresh(requestUrl: string) {
@@ -35,6 +44,14 @@ async function triggerAsyncRefresh(requestUrl: string) {
     u.searchParams.set('_cache_bypass', '1');
 
     const refreshUrl = u.href;
+    const pathKey = u.pathname;
+
+    // 熔断器检查：若路由持续失败，跳过本次刷新
+    const cb = refreshCircuitBreaker.get(pathKey);
+    if (cb && Date.now() < cb.nextRetryAt) {
+        logger.info(`Async cache refresh skipped by circuit breaker for ${pathKey} (retry after ${new Date(cb.nextRetryAt).toISOString()})`);
+        return;
+    }
 
     for (let attempt = 1; attempt <= ASYNC_REFRESH_RETRIES; attempt++) {
         try {
@@ -46,6 +63,8 @@ async function triggerAsyncRefresh(requestUrl: string) {
 
             if (res.ok) {
                 logger.info(`Async cache refresh succeeded for ${requestUrl}`);
+                // 刷新成功 → 重置熔断器
+                refreshCircuitBreaker.delete(pathKey);
                 return;
             }
             throw new Error(`HTTP ${res.status} ${res.statusText}`);
@@ -57,7 +76,12 @@ async function triggerAsyncRefresh(requestUrl: string) {
             }
         }
     }
-    logger.error(`Async cache refresh exhausted ${ASYNC_REFRESH_RETRIES} retries for ${u.pathname}`);
+
+    // 所有重试耗尽 → 更新熔断器计数，下次刷新按指数退避
+    const currentFailures = (refreshCircuitBreaker.get(pathKey)?.failures || 0) + 1;
+    const backoff = getCircuitBreakerBackoff(currentFailures);
+    refreshCircuitBreaker.set(pathKey, { failures: currentFailures, nextRetryAt: Date.now() + backoff });
+    logger.error(`Async cache refresh exhausted ${ASYNC_REFRESH_RETRIES} retries for ${u.pathname}. Circuit breaker: retry after ${(backoff / 1000).toFixed(0)}s (failure #${currentFailures})`);
 }
 
 const middleware: MiddlewareHandler = async (ctx, next) => {
