@@ -15,7 +15,7 @@ const PERMANENT_TTL = 365 * 24 * 60 * 60;
 
 // 异步刷新配置
 const ASYNC_REFRESH_TIMEOUT = 60000;
-const ASYNC_REFRESH_RETRIES = 5;
+const ASYNC_REFRESH_RETRIES = 1;
 const REFRESH_LOCK_TTL = 30; // 刷新锁 TTL（秒），防止并发刷新
 
 const REFRESH_LOCK_PREFIX = 'rsshub:refresh-lock:';
