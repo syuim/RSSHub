@@ -7,6 +7,7 @@ import api from '@/api';
 import { errorHandler, notFoundHandler } from '@/errors';
 import accessControl from '@/middleware/access-control';
 import antiHotlink from '@/middleware/anti-hotlink';
+import blacklist from '@/middleware/blacklist';
 import cache from '@/middleware/cache';
 import debug from '@/middleware/debug';
 import header from '@/middleware/header';
@@ -35,6 +36,7 @@ app.use(
     })
 );
 app.use(mLogger);
+app.use(blacklist);
 app.use(trace);
 app.use(honeybadger);
 app.use(sentry);

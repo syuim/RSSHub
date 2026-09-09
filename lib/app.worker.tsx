@@ -9,6 +9,7 @@ import { trimTrailingSlash } from 'hono/trailing-slash';
 
 import { errorHandler, notFoundHandler } from '@/errors';
 import accessControl from '@/middleware/access-control';
+import blacklist from '@/middleware/blacklist';
 import cache from '@/middleware/cache';
 import debug from '@/middleware/debug';
 import header from '@/middleware/header';
@@ -49,6 +50,7 @@ app.use(
     })
 );
 app.use(mLogger);
+app.use(blacklist);
 app.use(trace);
 
 // Heavy middleware excluded in Worker build:
