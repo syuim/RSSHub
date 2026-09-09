@@ -1,6 +1,5 @@
 // import { route as rulesRoute, handler as rulesHandler } from '@/api/radar/rules';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { Scalar } from '@scalar/hono-api-reference';
 
 import { handler as categoryOneHandler, route as categoryOneRoute } from '@/api/category/one';
 import { handler as followConfigHandler, route as followConfigRoute } from '@/api/follow/config';
@@ -33,9 +32,11 @@ for (const path in docs.paths) {
     delete docs.paths[path];
 }
 app.get('/openapi.json', (ctx) => ctx.json(docs));
-app.get(
-    '/reference',
-    Scalar({
+app.get('/reference', async (ctx, next) => {
+    // The Scalar reference UI is a large client bundle; import it lazily so it never loads for
+    // instances that don't browse the API docs.
+    const { Scalar } = await import('@scalar/hono-api-reference');
+    return Scalar({
         content: docs,
         hiddenClients: {
             c: true,
@@ -60,7 +61,7 @@ app.get(
             shell: ['httpie', 'wget'], // allow curl
             swift: true,
         },
-    })
-);
+    })(ctx, next);
+});
 
 export default app;

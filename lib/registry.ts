@@ -7,9 +7,9 @@ import { config } from '@/config';
 import type { DevRegistry } from '@/registry-dev';
 import type { NamespacesType, RoutesType } from '@/registry-helpers';
 import { registerApiRoutes, registerRssRoutes } from '@/registry-helpers';
+import type { LazyRegistry } from '@/registry-lazy';
 import healthz from '@/routes/healthz';
 import index from '@/routes/index';
-import metrics from '@/routes/metrics';
 import robotstxt from '@/routes/robots.txt';
 import type { Route } from '@/types';
 import { isWorker } from '@/utils/is-worker';
@@ -36,10 +36,15 @@ function safeNamespaces(namespaces: NamespacesType): NamespacesType {
 
 let namespaces: NamespacesType = {};
 let devRegistry: DevRegistry | undefined;
+let lazyRegistry: LazyRegistry | undefined;
 
 if (config.isPackage) {
     // @ts-ignore build artifact of pnpm build:routes
     namespaces = (await import('../assets/build/routes.js')).default;
+} else if (!isWorker && !process.env.VERCEL_ENV && process.env.NODE_ENV === 'production') {
+    // lazy load production namespaces: only the lightweight index is imported at startup
+    const { createLazyRegistry } = await import('@/registry-lazy');
+    lazyRegistry = await createLazyRegistry(namespaces);
 } else {
     switch (process.env.NODE_ENV || process.env.VERCEL_ENV) {
         case 'production':
@@ -65,17 +70,18 @@ if (config.isPackage) {
     }
 }
 
-if (config.feature.disable_nsfw && !devRegistry) {
+// Lazy registries filter nothing upfront (matching dev behavior); disable_nsfw applies to full loads only
+if (config.feature.disable_nsfw && !devRegistry && !lazyRegistry) {
     namespaces = safeNamespaces(namespaces);
 }
 
-export const ensureAllLoaded: () => Promise<void> = devRegistry?.ensureAllLoaded ?? (() => Promise.resolve());
+export const ensureAllLoaded: () => Promise<void> = lazyRegistry?.ensureAllLoaded ?? devRegistry?.ensureAllLoaded ?? (() => Promise.resolve());
 
 export { namespaces };
 
 const app = new Hono();
 
-if (!devRegistry) {
+if (!devRegistry && !lazyRegistry) {
     registerRssRoutes(app, namespaces);
     registerApiRoutes(app, namespaces);
 }
@@ -84,11 +90,13 @@ app.get('/', index);
 app.get('/healthz', healthz);
 app.get('/robots.txt', robotstxt);
 if (config.debugInfo !== 'false') {
-    // Only enable tracing in debug mode
-    app.get('/metrics', metrics);
+    // Only enable tracing in debug mode; load the OpenTelemetry metrics module on first request
+    app.get('/metrics', async (ctx, next) => (await import('@/routes/metrics')).default(ctx, next));
 }
 
-if (devRegistry) {
+if (lazyRegistry) {
+    app.use('*', lazyRegistry.middleware);
+} else if (devRegistry) {
     app.use('*', devRegistry.middleware);
 }
 

@@ -1,18 +1,17 @@
-import Honeybadger from '@honeybadger-io/js';
 import type { ErrorHandler, NotFoundHandler } from 'hono';
 import { routePath } from 'hono/route';
 
 import { config } from '@/config';
 import { getDebugInfo, setDebugInfo } from '@/utils/debug-info';
 import logger from '@/utils/logger';
-import { requestMetric } from '@/utils/otel';
 import Error from '@/views/error';
 
 import NotFoundError from './types/not-found';
 
+const Honeybadger = config.honeybadger.apiKey ? (await import('@honeybadger-io/js')).default : undefined;
 const Sentry = config.sentry.dsn ? await import('@sentry/node') : undefined;
 
-export const errorHandler: ErrorHandler = (error, ctx) => {
+export const errorHandler: ErrorHandler = async (error, ctx) => {
     const requestPath = ctx.req.path;
     const matchedRoute = routePath(ctx);
     const hasMatchedRoute = matchedRoute !== '/*';
@@ -40,7 +39,7 @@ export const errorHandler: ErrorHandler = (error, ctx) => {
     hasMatchedRoute && debug.errorRoutes[matchedRoute]++;
     setDebugInfo(debug);
 
-    if (config.honeybadger.apiKey) {
+    if (Honeybadger) {
         Honeybadger.notify(error, {
             context: { name: requestPath.split('/', 2)[1] },
         });
@@ -76,7 +75,10 @@ export const errorHandler: ErrorHandler = (error, ctx) => {
             break;
     }
     logger.error(`Error in ${requestPath}: ${errorMessage}`);
-    requestMetric.error({ path: matchedRoute, method: ctx.req.method, status: ctx.res.status });
+    if (config.debugInfo !== 'false') {
+        const { requestMetric } = await import('@/utils/otel');
+        requestMetric.error({ path: matchedRoute, method: ctx.req.method, status: ctx.res.status });
+    }
 
     return config.isPackage || ctx.req.query('format') === 'json'
         ? ctx.json({

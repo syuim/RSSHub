@@ -114,6 +114,10 @@ ${uniquePaths.map((path) => `  | \`${path}\``).join('\n')};
 const buildDir = path.join(__dirname, '../../assets/build');
 fs.mkdirSync(buildDir, { recursive: true });
 
+// Indent so each "module" pair sits on its own line ending with "\n" (mirroring routes.js), which
+// lets the regex below turn the quoted string back into a real `() => import(...)` expression.
+const serializeModule = (value: Record<string, unknown>) => `export default ${JSON.stringify(value, null, 2)}`.replaceAll(/"module": "(.*)"\n/g, '"module": $1\n');
+
 // For Worker build, only output routes-worker.js with filtered namespaces
 // For regular build, output all files
 if (isWorkerBuild) {
@@ -124,5 +128,23 @@ if (isWorkerBuild) {
     fs.writeFileSync(path.join(__dirname, '../../assets/build/maintainers.json'), JSON.stringify(maintainers, null, 2));
     fs.writeFileSync(path.join(__dirname, '../../assets/build/routes.json'), JSON.stringify(namespaces, null, 2));
     fs.writeFileSync(path.join(__dirname, '../../assets/build/routes.js'), `export default ${JSON.stringify(namespaces, null, 2)}`.replaceAll(/"module": "(.*)"\n/g, '"module": $1\n'));
+
+    // Lazy-loadable per-namespace metadata chunks plus a lightweight key -> loader index.
+    // Production starts with only the index in memory; each namespace is imported on first request.
+    // Loader values must stay statically analyzable import() calls so bundlers can split chunks.
+    const lazyDir = path.join(__dirname, '../../assets/build/routes-lazy');
+    fs.rmSync(lazyDir, { recursive: true, force: true });
+    fs.mkdirSync(lazyDir, { recursive: true });
+    const lazyIndex: Record<string, string> = {};
+    for (const namespace in namespacesToProcess) {
+        const nsPath = path.join(lazyDir, namespace);
+        fs.mkdirSync(path.dirname(nsPath), { recursive: true });
+        fs.writeFileSync(`${nsPath}.js`, serializeModule(namespacesToProcess[namespace]));
+        lazyIndex[namespace] = `./routes-lazy/${namespace}.js`;
+    }
+    const indexBody = Object.entries(lazyIndex)
+        .map(([key, file]) => `${JSON.stringify(key)}: () => import(${JSON.stringify(file)})`)
+        .join(',\n');
+    fs.writeFileSync(path.join(__dirname, '../../assets/build/routes-index.js'), `export default {\n${indexBody}\n}`);
     fs.writeFileSync(path.join(__dirname, '../../assets/build/route-paths.ts'), routePathsType);
 }

@@ -1,8 +1,11 @@
 import type { MiddlewareHandler } from 'hono';
 
+import { config } from '@/config';
 import { getPath, time } from '@/utils/helpers';
 import logger from '@/utils/logger';
-import { requestMetric } from '@/utils/otel';
+import type { requestMetric as RequestMetric } from '@/utils/otel';
+
+let requestMetric: typeof RequestMetric | undefined;
 
 enum LogPrefix {
     Outgoing = '-->',
@@ -39,7 +42,10 @@ const middleware: MiddlewareHandler = async (ctx, next) => {
     const status = ctx.res.status;
 
     logger.info(`${LogPrefix.Outgoing} ${method} ${path} ${colorStatus(status)} ${time(start)}`);
-    requestMetric.success(Date.now() - start, { path: routePath, method, status });
+    if (config.debugInfo !== 'false') {
+        // Metrics are only surfaced on /metrics (debug builds); skip the OpenTelemetry tree otherwise
+        (requestMetric ??= (await import('@/utils/otel')).requestMetric).success(Date.now() - start, { path: routePath, method, status });
+    }
 };
 
 export default middleware;
