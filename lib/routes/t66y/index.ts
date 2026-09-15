@@ -93,16 +93,21 @@ async function handler(ctx) {
 
     const out: DataItem[] = [];
     for (const item of list) {
-        // eslint-disable-next-line no-await-in-loop
-        const processed = await cache.tryGet(item.link!, async () => {
-            const { data: response } = await got(item.link);
+        try {
+            // eslint-disable-next-line no-await-in-loop
+            const processed = await cache.tryGet(item.link!, async () => {
+                const { data: response } = await got(item.link);
 
-            item.description = parseContent(response);
+                item.description = parseContent(response);
 
-            return item;
-        });
-        if (processed) {
-            out.push(processed);
+                return item;
+            });
+            if (processed) {
+                out.push(processed);
+            }
+        } catch {
+            // detail page unavailable (404 / socket error): keep the bare item instead of failing the whole route
+            out.push(item);
         }
     }
 

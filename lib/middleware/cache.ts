@@ -13,10 +13,10 @@ const bypassList = new Set(['/', '/robots.txt', '/logo.png', '/favicon.ico']);
 // 永久缓存 TTL（365 天）
 const PERMANENT_TTL = 365 * 24 * 60 * 60;
 
-// 异步刷新配置
-const ASYNC_REFRESH_TIMEOUT = 60000;
+// 异步刷新配置：重路由（t66y/2048 等串行抓取）实测需 100~176s，超时须留足余量，否则每次刷新都被误判失败
+const ASYNC_REFRESH_TIMEOUT = 300000;
 const ASYNC_REFRESH_RETRIES = 1;
-const REFRESH_LOCK_TTL = 30; // 刷新锁 TTL（秒），防止并发刷新
+const REFRESH_LOCK_TTL = 300; // 刷新锁 TTL（秒），须 >= ASYNC_REFRESH_TIMEOUT/1000，避免刷新进行中被重复触发
 
 const REFRESH_LOCK_PREFIX = 'rsshub:refresh-lock:';
 

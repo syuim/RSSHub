@@ -73,11 +73,11 @@ async function handler(ctx) {
 
         return { url: new URL(targetUrl!, 'https://2048.info').href };
     });
-    // 获取重定向后的url
-    const redirectResponse = await ofetch.raw(domainInfo.url);
+    // 解析 bbs.php 重定向并获取 cookie，24 小时内复用：2048.info 限流频繁（socket closed），避免每次请求都打
     const redirected = await cache.tryGet(
-        `2048:redirected:${new URL(redirectResponse.url).host}`,
+        `2048:redirected:${domainInfo.url}`,
         async () => {
+            const redirectResponse = await ofetch.raw(domainInfo.url);
             const captchaPage = await ofetch(redirectResponse.url);
             const $captcha = load(captchaPage);
             // Extract the value of safeid from the $captcha HTML content
