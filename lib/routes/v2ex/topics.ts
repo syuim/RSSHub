@@ -1,3 +1,4 @@
+import { config } from '@/config';
 import type { Route } from '@/types';
 import { ViewType } from '@/types';
 import got from '@/utils/got';
@@ -40,7 +41,12 @@ export const route: Route = {
 async function handler(ctx) {
     const type = ctx.req.param('type');
 
-    const { data } = await got(`https://www.v2ex.com/api/topics/${type}.json`);
+    // v2ex 的 Cloudflare 风控会拒绝「Node TLS 指纹 + 浏览器 UA」的组合，这里固定使用 RSSHub 自身 UA
+    const { data } = await got(`https://www.v2ex.com/api/topics/${type}.json`, {
+        headers: {
+            'user-agent': config.trueUA,
+        },
+    });
 
     let title;
     if (type === 'hot') {
