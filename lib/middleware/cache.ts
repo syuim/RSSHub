@@ -1,0 +1,205 @@
+import type { MiddlewareHandler } from 'hono';
+import xxhash from 'xxhash-wasm';
+
+import { config } from '@/config';
+import RequestInProgressError from '@/errors/types/request-in-progress';
+import type { Data } from '@/types';
+import cacheModule from '@/utils/cache/index';
+import { isWorker } from '@/utils/is-worker';
+import logger from '@/utils/logger';
+import { hasItemFilters } from '@/utils/route-limit';
+
+const bypassList = new Set(['/', '/robots.txt', '/logo.png', '/favicon.ico']);
+
+// 永久缓存 TTL（365 天）；测试环境沿用上游的 routeExpire，保证过期/刷新行为可测
+const PERMANENT_TTL = 365 * 24 * 60 * 60;
+const cacheTtl = process.env.NODE_ENV === 'test' ? config.cache.routeExpire : PERMANENT_TTL;
+
+// 异步刷新仅在非测试环境启用
+const ASYNC_REFRESH_ENABLED = process.env.NODE_ENV !== 'test';
+
+// 异步刷新配置：重路由（t66y/2048 等串行抓取）实测需 100~176s，超时须留足余量，否则每次刷新都被误判失败
+const ASYNC_REFRESH_TIMEOUT = 300000;
+const ASYNC_REFRESH_RETRIES = 1;
+const REFRESH_LOCK_TTL = 300; // 刷新锁 TTL（秒），须 >= ASYNC_REFRESH_TIMEOUT/1000，避免刷新进行中被重复触发
+
+const REFRESH_LOCK_PREFIX = 'rsshub:refresh-lock:';
+
+// 异步刷新熔断器：持久失败的路由逐步退避，避免无效连接堆积
+const refreshCircuitBreaker = new Map<string, { failures: number; nextRetryAt: number }>();
+const CB_INITIAL_BACKOFF = 60000; // 首次熔断 1min
+const CB_MAX_BACKOFF = 3_600_000; // 最长熔断 1h
+
+function getCircuitBreakerBackoff(failures: number): number {
+    return Math.min(CB_INITIAL_BACKOFF * 2 ** (failures - 1), CB_MAX_BACKOFF);
+}
+
+const { h64ToString } = await xxhash();
+
+async function triggerAsyncRefresh(requestUrl: string) {
+    if (isWorker) {
+        return;
+    }
+
+    const { port } = config.connect;
+    const u = new URL(requestUrl);
+    u.protocol = 'http:';
+    u.hostname = '127.0.0.1';
+    u.port = String(port);
+    u.searchParams.set('_cache_bypass', '1');
+
+    const refreshUrl = u.href;
+    const pathKey = u.pathname;
+
+    // 熔断器检查：若路由持续失败，跳过本次刷新
+    const cb = refreshCircuitBreaker.get(pathKey);
+    if (cb && Date.now() < cb.nextRetryAt) {
+        logger.info(`Async cache refresh skipped by circuit breaker for ${pathKey} (retry after ${new Date(cb.nextRetryAt).toISOString()})`);
+        return;
+    }
+
+    for (let attempt = 1; attempt <= ASYNC_REFRESH_RETRIES; attempt++) {
+        try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), ASYNC_REFRESH_TIMEOUT);
+            // eslint-disable-next-line no-await-in-loop
+            const res = await fetch(refreshUrl, { signal: controller.signal });
+            clearTimeout(timer);
+
+            if (res.ok) {
+                logger.info(`Async cache refresh succeeded for ${requestUrl}`);
+                // 刷新成功 → 重置熔断器
+                refreshCircuitBreaker.delete(pathKey);
+                return;
+            }
+            throw new Error(`HTTP ${res.status} ${res.statusText}`);
+        } catch (error: any) {
+            logger.error(`Async cache refresh attempt ${attempt}/${ASYNC_REFRESH_RETRIES} failed for ${u.pathname}: ${error.message}`);
+            if (attempt < ASYNC_REFRESH_RETRIES) {
+                // eslint-disable-next-line no-await-in-loop
+                await new Promise((r) => setTimeout(r, Math.min(2000 * 2 ** (attempt - 1), 30000)));
+            }
+        }
+    }
+
+    // 所有重试耗尽 → 更新熔断器计数，下次刷新按指数退避
+    const currentFailures = (refreshCircuitBreaker.get(pathKey)?.failures || 0) + 1;
+    const backoff = getCircuitBreakerBackoff(currentFailures);
+    refreshCircuitBreaker.set(pathKey, { failures: currentFailures, nextRetryAt: Date.now() + backoff });
+    logger.error(`Async cache refresh exhausted ${ASYNC_REFRESH_RETRIES} retries for ${u.pathname}. Circuit breaker: retry after ${(backoff / 1000).toFixed(0)}s (failure #${currentFailures})`);
+}
+
+// only give cache string, as the `!` condition tricky
+// XXH64 is used to shrink key size
+// plz, write these tips in comments!
+const middleware: MiddlewareHandler = async (ctx, next) => {
+    if (!cacheModule.status.available || bypassList.has(ctx.req.path)) {
+        await next();
+        return;
+    }
+
+    const requestPath = ctx.req.path;
+    const format = `:${ctx.req.query('format') || config.format}`;
+    const limit = ctx.req.query('limit') ? `:${ctx.req.query('limit')}` : '';
+    // Routes may select entries before fetching details according to this option.
+    const sortedQuery = ctx.req.query('sorted');
+    const sorted = sortedQuery === undefined ? '' : sortedQuery === 'false' ? ':sorted=false' : ':sorted=true';
+    const filtered = hasItemFilters(ctx) ? ':filtered' : '';
+    const requestKey = h64ToString(requestPath + format + limit + sorted + filtered);
+    const key = 'rsshub:koa-redis-cache:' + requestKey;
+    const controlKey = 'rsshub:path-requested:' + requestKey;
+
+    // _cache_bypass 用于异步刷新：不读缓存，但正常写缓存
+    const isBypass = ctx.req.query('_cache_bypass') === '1';
+
+    let value = isBypass ? null : await cacheModule.globalCache.get(key);
+
+    if (value) {
+        ctx.status(200);
+        ctx.header('RSSHub-Cache-Status', 'HIT');
+        ctx.set('data', JSON.parse(value));
+        await next();
+
+        // 命中缓存后触发后台刷新；刷新锁避免并发重复刷新
+        if (ASYNC_REFRESH_ENABLED) {
+            const refreshLockKey = REFRESH_LOCK_PREFIX + h64ToString(requestPath + format + limit);
+            const claimed = await cacheModule.globalCache.claim(refreshLockKey, REFRESH_LOCK_TTL);
+            if (claimed) {
+                triggerAsyncRefresh(ctx.req.url);
+            }
+        }
+        return;
+    }
+
+    // Only atomic backends can coordinate fetchers. HTTP/KV may return stale
+    // control keys after a completed request, while their feed cache stays useful.
+    let isRequesting = false;
+    let ownsClaim = false;
+    if (!isBypass && cacheModule.globalCache.supportsAtomicClaims) {
+        ownsClaim = await cacheModule.globalCache.claim(controlKey, config.cache.requestTimeout);
+        isRequesting = !ownsClaim;
+    }
+
+    if (isRequesting) {
+        let retryTimes = process.env.NODE_ENV === 'test' ? 1 : 10;
+        let bypass = false;
+        while (retryTimes > 0) {
+            // eslint-disable-next-line no-await-in-loop
+            await new Promise((resolve) => setTimeout(resolve, process.env.NODE_ENV === 'test' ? 3000 : 6000));
+            // eslint-disable-next-line no-await-in-loop
+            if ((await cacheModule.globalCache.get(controlKey)) !== '1') {
+                bypass = true;
+                break;
+            }
+            retryTimes--;
+        }
+        if (!bypass) {
+            throw new RequestInProgressError('This path is currently fetching, please come back later!');
+        }
+        value = await cacheModule.globalCache.get(key);
+        if (value) {
+            ctx.status(200);
+            ctx.header('RSSHub-Cache-Status', 'HIT');
+            ctx.set('data', JSON.parse(value));
+            await next();
+            return;
+        }
+    }
+
+    if (isRequesting) {
+        // waited out a stale claim without finding a cache entry, take over the fetch
+        ownsClaim = await cacheModule.globalCache.claim(controlKey, config.cache.requestTimeout);
+        if (!ownsClaim) {
+            throw new RequestInProgressError('This path is currently fetching, please come back later!');
+        }
+    }
+
+    // let routers control cache
+    ctx.set('cacheKey', key);
+    if (ownsClaim) {
+        ctx.set('cacheControlKey', controlKey);
+    }
+
+    try {
+        await next();
+
+        const data: Data = ctx.get('data');
+        if (ctx.res.headers.get('Cache-Control') !== 'no-cache' && data) {
+            if (isBypass && (!data.item || data.item.length === 0)) {
+                logger.warn(`Async refresh: skip caching empty result for ${requestPath}`);
+            } else {
+                data.lastBuildDate = new Date().toUTCString();
+                ctx.set('data', data);
+                const body = JSON.stringify(data);
+                await cacheModule.globalCache.set(key, body, cacheTtl);
+            }
+        }
+    } finally {
+        // Release after writing the feed, including failures after the route ran.
+        if (ownsClaim) {
+            await cacheModule.globalCache.set(controlKey, '0', config.cache.requestTimeout);
+        }
+    }
+};
+
+export default middleware;
